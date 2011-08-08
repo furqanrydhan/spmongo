@@ -18,8 +18,6 @@ class mongo(object):
         self._host = str(kwargs.get('host', '127.0.0.1'))
         self._port = int(kwargs.get('port', 27017))
     def connection(self):
-        self._host = str(self._settings['mongo']['host'])
-        self._port = int(self._settings['mongo']['port'])
         mongo_down_reported = False
         #if not self._async:
         while True:
@@ -40,4 +38,6 @@ class mongo(object):
     def collection(self, db, collection):
         return self.database(db).__getattr__(collection)
     def __getattr__(self, key):
+        return self.database(key)
+    def __getitem__(self, key):
         return self.database(key)
