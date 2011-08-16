@@ -1,4 +1,4 @@
-# StylePage tools: Python MongoDBs
+# StylePage tools: Python MongoDB
 
 ## Dependencies
 
@@ -27,6 +27,8 @@ pip install -e spmongo
 
 ```python
 import spmongo
+server = spmongo.mongo(host='127.0.0.1')
+server['my_db']['my_collection'].insert({'foo':'bar'})
 ```
 
 ```python
