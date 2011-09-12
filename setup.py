@@ -16,6 +16,10 @@ def setup():
         ],
         install_requires=[
             'pymongo',
+            'stylepage-splog',
+        ],
+        dependency_links=[
+            'http://github.com/stylepage/splog/tarball/master#egg=stylepage-splog',
         ],
     )
 
