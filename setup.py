@@ -15,7 +15,7 @@ def setup():
             'spmongo',
         ],
         install_requires=[
-            'pymongo',
+            'pymongo==2.0.1',
             'stylepage-splog',
         ],
         dependency_links=[
