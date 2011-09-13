@@ -16,6 +16,8 @@ MONGO_DOWN_NICE = 0.02
 
 # Patch up basic Mongo functions to handle reconnect
 if not hasattr(pymongo, '_spmongo_monkeyed'):
+    pymongo._spmongo_monkeyed = False
+if not pymongo._spmongo_monkeyed:
     CONNECTION_POOL = {}
     def _reconnect(fn):
         def __reconnect(*args, **kwargs):
