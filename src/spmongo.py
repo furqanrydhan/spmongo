@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 
+__version_info__ = (0, 1, 6)
+__version__ = '.'.join([str(i) for i in __version_info__])
+version = __version__
+
 import pymongo
 import pymongo.errors
 import socket
@@ -7,19 +11,8 @@ import splog
 import time
 import traceback
 
-
-
-try:
-    from _version import __version_info__, __version__, version
-except ImportError:
-    pass
-
-
-
 # It can take up to 30 seconds for a new primary to be selected by the replicaset.  Please reduce thrashing.
 MONGO_DOWN_NICE = 1
-
-
 
 # Patch up basic Mongo functions to handle reconnect
 if not hasattr(pymongo, '_spmongo_monkeyed'):
@@ -63,8 +56,6 @@ if not pymongo._spmongo_monkeyed:
 
     # Don't redo all this
     pymongo._spmongo_monkeyed = True
-
-
 
 class mongo(object):
     def __init__(self, *args, **kwargs):

@@ -4,21 +4,34 @@
 import os.path
 import setuptools
 
-def setup():
-    with open(os.path.join('src', '_version.py'), 'r') as f:
+def version(package_name):
+    with open(os.path.join('src', package_name + '.py'), 'r') as f:
         for line in f.readlines():
             if 'version' in line:
                 try:
                     exec(line)
-                except SyntaxError:
+                    assert(isinstance(version, basestring))
+                    break
+                except (SyntaxError, AssertionError, NameError):
                     pass
     try:
         assert(isinstance(version, basestring))
-    except AssertionError:
+    except (AssertionError, NameError):
         version = 'unknown'
+    return version
+
+def github(package_name, version=None):
+    # The important things here:
+    # 1. The URL should be accessible
+    # 2. The URL should point to a page which _is_, or which clearly points _to_, the tarball/zipball/egg
+    # 3. The URL should indicate which package and version it is
+    return 'http://github.com/stylepage/{package_name}/tarball/v{version}#egg={package_name}-{version}'.format(package_name=package_name, version=version)
+
+def setup():
+    package_name = 'spmongo'
     setuptools.setup(
-        name='spmongo',
-        version=version,
+        name=package_name,
+        version=version(package_name),
         description='StylePage tools: Python MongoDB',
         author='mattbornski',
         url='http://github.com/stylepage/spmongo',
@@ -27,15 +40,11 @@ def setup():
             'spmongo',
         ],
         install_requires=[
-            'pymongo>=2.0.1',
-            'splog>=0.1.7',
+            'pymongo==2.0.1',
+            'splog==0.1.8',
         ],
         dependency_links=[
-            # The important things here:
-            # 1. The URL should be accessible
-            # 2. The URL should point to a page which _is_, or which clearly points _to_, the tarball/zipball/egg
-            # 3. The URL should indicate which package and version it is
-            'http://github.com/stylepage/splog/tarball/v0.1.7#egg=splog-0.1.7',
+            github('splog', '0.1.8'),
         ],
     )
 
