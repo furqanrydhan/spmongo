@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 
 import pymongo
+import pymongo.connection
+import pymongo.cursor
+import pymongo.errors
+import socket
 import splog
 import time
 
@@ -11,10 +15,6 @@ MONGO_DOWN_NICE = 0.02
 
 
 # Patch up basic Mongo functions to handle reconnect
-import pymongo.connection
-import pymongo.cursor
-import pymongo.errors
-
 if not hasattr(pymongo, '_spmongo_monkeyed'):
     CONNECTION_POOL = {}
     def _reconnect(fn):
@@ -22,7 +22,7 @@ if not hasattr(pymongo, '_spmongo_monkeyed'):
             while True:
                 try:
                     return fn(*args, **kwargs)
-                except pymongo.errors.AutoReconnect as e:
+                except (pymongo.errors.AutoReconnect, socket.error) as e:
                     splog.exception(e)
                 time.sleep(MONGO_DOWN_NICE)
         return __reconnect

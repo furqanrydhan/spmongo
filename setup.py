@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import setuptools
- 
+
+__version__ = '0.1.1'
+
 def setup():
     setuptools.setup(
         name='spmongo',
-        version='0.1',
+        version=__version__,
         description='StylePage tools: Python MongoDB',
         author='mattbornski',
         url='http://github.com/stylepage/spmongo',
