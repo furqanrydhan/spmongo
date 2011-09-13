@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 
 import pymongo
-import pymongo.connection
-import pymongo.cursor
 import pymongo.errors
 import socket
 import splog
 import time
+import traceback
 
 
 
-MONGO_DOWN_NICE = 0.02
+# It can take up to 30 seconds for a new primary to be selected by the replicaset.  Please reduce thrashing.
+MONGO_DOWN_NICE = 1
 
 
 
@@ -18,20 +18,43 @@ MONGO_DOWN_NICE = 0.02
 if not hasattr(pymongo, '_spmongo_monkeyed'):
     pymongo._spmongo_monkeyed = False
 if not pymongo._spmongo_monkeyed:
-    CONNECTION_POOL = {}
-    def _reconnect(fn):
-        def __reconnect(*args, **kwargs):
+    # Helper function to reconnect.
+    # The first argument is the function which should be wrapped.
+    # The second argument is a helper function to locate the connection object
+    def _reconnect(fn, locate_connection):
+        def __reconnect(obj, *args, **kwargs):
+            #attempts = 0
             while True:
                 try:
-                    return fn(*args, **kwargs)
+                    return fn(obj, *args, **kwargs)
                 except (pymongo.errors.AutoReconnect, socket.error) as e:
-                    splog.exception(e)
-                time.sleep(MONGO_DOWN_NICE)
+                    #attempts += 1
+                    splog.warning('Error communicating with Mongo, reconnecting')
+                    for line in traceback.format_exc(e).splitlines():
+                        splog.warning(line)
+                    locate_connection(obj).disconnect()
+                    #if attempts % 10 == 0:
+                    #    # PyMongo sometimes chokes on a seed list where the first seed does not answer.
+                    #    print locate_connection(obj).host
+                    #    print locate_connection(obj).nodes
+                    time.sleep(MONGO_DOWN_NICE)
         return __reconnect
-    pymongo.connection.Connection._Connection__find_node = _reconnect(pymongo.connection.Connection._Connection__find_node)
-    pymongo.connection.Connection._send_message = _reconnect(pymongo.connection.Connection._send_message)
-    pymongo.connection.Connection._send_message_with_response = _reconnect(pymongo.connection.Connection._send_message_with_response)
-    pymongo.cursor.Cursor._Cursor__send_message = _reconnect(pymongo.cursor.Cursor._Cursor__send_message)
+    
+    _connection_module = __import__('pymongo.connection')
+    _reconnect_connection = lambda fn: _reconnect(fn, lambda obj: obj)
+    _connection_module.connection.Connection._Connection__find_node = _reconnect_connection(_connection_module.connection.Connection._Connection__find_node)
+    _connection_module.connection.Connection._send_message= _reconnect_connection(_connection_module.connection.Connection._send_message)
+    _connection_module.connection.Connection._send_message_with_response = _reconnect_connection(_connection_module.connection.Connection._send_message_with_response)
+
+    _cursor_module = __import__('pymongo.cursor')
+    _reconnect_cursor = lambda fn: _reconnect(fn, lambda obj: obj.connection)
+    _cursor_module.cursor.Cursor._refresh = _reconnect_cursor(_cursor_module.cursor.Cursor._refresh)
+
+    # Connection pooling on a per-process basis.
+    # TODO should this be per-thread?
+    CONNECTION_POOL = {}
+
+    # Don't redo all this
     pymongo._spmongo_monkeyed = True
 
 
@@ -43,7 +66,8 @@ class mongo(object):
     def connection(self):
         global CONNECTION_POOL
         if tuple(self._hosts) not in CONNECTION_POOL:
-            CONNECTION_POOL[tuple(self._hosts)] = pymongo.Connection(self._hosts)
+            # TODO PyMongo does not do useful things with the slave_okay parameter at the moment.
+            CONNECTION_POOL[tuple(self._hosts)] = pymongo.Connection(self._hosts)#, slave_okay=True)
         return CONNECTION_POOL[tuple(self._hosts)]
     def database(self, name):
         return self.connection()[name]
