@@ -39,7 +39,7 @@ if not pymongo._spmongo_monkeyed:
 class mongo(object):
     def __init__(self, *args, **kwargs):
         self._hosts = str(kwargs.get('hosts', kwargs.get('host', '127.0.0.1'))).split(',')
-        self._hosts = [host + ':' + str(kwargs.get('port', (host.split(':')[1] if ':' in host else 27017))) for host in self._hosts]
+        self._hosts = [(host.split(':')[0] if ':' in host else host) + ':' + str(kwargs.get('port', (host.split(':')[1] if ':' in host else 27017))) for host in self._hosts]
     def connection(self):
         global CONNECTION_POOL
         if tuple(self._hosts) not in CONNECTION_POOL:
