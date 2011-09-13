@@ -47,7 +47,7 @@ if not pymongo._spmongo_monkeyed:
     _connection_module.connection.Connection._send_message_with_response = _reconnect_connection(_connection_module.connection.Connection._send_message_with_response)
 
     _cursor_module = __import__('pymongo.cursor')
-    _reconnect_cursor = lambda fn: _reconnect(fn, lambda obj: obj.connection)
+    _reconnect_cursor = lambda fn: _reconnect(fn, lambda obj: obj.collection.database.connection)
     _cursor_module.cursor.Cursor._refresh = _reconnect_cursor(_cursor_module.cursor.Cursor._refresh)
 
     # Connection pooling on a per-process basis.
