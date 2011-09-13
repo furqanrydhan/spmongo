@@ -9,6 +9,13 @@ import traceback
 
 
 
+try:
+    from _version import __version_info__, __version__, version
+except ImportError:
+    pass
+
+
+
 # It can take up to 30 seconds for a new primary to be selected by the replicaset.  Please reduce thrashing.
 MONGO_DOWN_NICE = 1
 
