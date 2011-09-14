@@ -23,32 +23,46 @@ if not pymongo._spmongo_monkeyed:
     # The second argument is a helper function to locate the connection object
     def _reconnect(fn, locate_connection):
         def __reconnect(obj, *args, **kwargs):
-            #attempts = 0
             while True:
                 try:
                     return fn(obj, *args, **kwargs)
-                except (pymongo.errors.AutoReconnect, socket.error) as e:
-                    #attempts += 1
-                    splog.warning('Error communicating with Mongo, reconnecting')
+                #except socket.error as e:
+                #    splog.warning('socket error, disconnecting and reconnecting')
+                #    locate_connection(obj).disconnect()
+                except pymongo.errors.AutoReconnect as e:
+                    # Retry procedure.
+                    # Do not disconnect, as this will cause Mongo to forget that it
+                    # had checked the problematic host and re-check it, putting us
+                    # into a loop that will only end when the host comes back online.
+                    splog.warning('Error communicating with Mongo, retrying')
                     for line in traceback.format_exc(e).splitlines():
                         splog.warning(line)
-                    locate_connection(obj).disconnect()
-                    #if attempts % 10 == 0:
-                    #    # PyMongo sometimes chokes on a seed list where the first seed does not answer.
-                    #    print locate_connection(obj).host
-                    #    print locate_connection(obj).nodes
+                finally:
                     time.sleep(MONGO_DOWN_NICE)
         return __reconnect
     
-    _connection_module = __import__('pymongo.connection')
-    _reconnect_connection = lambda fn: _reconnect(fn, lambda obj: obj)
-    _connection_module.connection.Connection._Connection__find_node = _reconnect_connection(_connection_module.connection.Connection._Connection__find_node)
-    _connection_module.connection.Connection._send_message= _reconnect_connection(_connection_module.connection.Connection._send_message)
-    _connection_module.connection.Connection._send_message_with_response = _reconnect_connection(_connection_module.connection.Connection._send_message_with_response)
+    #_connection_module = __import__('pymongo.connection')
+    #_reconnect_connection = lambda fn: _reconnect(fn, lambda obj: obj)
+    #_connection_module.connection.Connection._Connection__find_node = _reconnect_connection(_connection_module.connection.Connection._Connection__find_node)
+    #_connection_module.connection.Connection._send_message= _reconnect_connection(_connection_module.connection.Connection._send_message)
+    #_connection_module.connection.Connection._send_message_with_response = _reconnect_connection(_connection_module.connection.Connection._send_message_with_response)
 
-    _cursor_module = __import__('pymongo.cursor')
-    _reconnect_cursor = lambda fn: _reconnect(fn, lambda obj: obj.collection.database.connection)
-    _cursor_module.cursor.Cursor._refresh = _reconnect_cursor(_cursor_module.cursor.Cursor._refresh)
+    #_cursor_module = __import__('pymongo.cursor')
+    #_reconnect_cursor = lambda fn: _reconnect(fn, lambda obj: obj.collection.database.connection)
+    #_cursor_module.cursor.Cursor._refresh = _reconnect_cursor(_cursor_module.cursor.Cursor._refresh)
+    
+    #_collection_module = __import__('pymongo.collection')
+    #_reconnect_collection = lambda fn: _reconnect(fn, lambda obj: obj.database.connection)
+    #for fn in dir(_collection_module.collection.Collection):
+    #    try:
+    #        assert(not fn.startswith('_'))
+    #        assert(fn not in ['super'])
+    #        assert(fn in _collection_module.collection.Collection.__dict__)
+    #        assert(hasattr(_collection_module.collection.Collection.__dict__[fn], '__call__'))
+    #        setattr(_collection_module.collection.Collection, fn, _reconnect_collection(_collection_module.collection.Collection.__dict__[fn]))
+    #        splog.info('Monkeyed with pymongo.collection.Collection.' + fn)
+    #    except AssertionError:
+    #        pass
 
     # Connection pooling on a per-process basis.
     # TODO should this be per-thread?
