@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version_info__ = (0, 1, 6)
+__version_info__ = (0, 1, 7)
 __version__ = '.'.join([str(i) for i in __version_info__])
 version = __version__
 
@@ -12,64 +12,58 @@ import time
 import traceback
 
 # It can take up to 30 seconds for a new primary to be selected by the replicaset.  Please reduce thrashing.
-MONGO_DOWN_NICE = 1
+MONGO_DOWN_NICE = 0.5
+# Per-process connection pool.
+# TODO should this be per-thread?
+CONNECTION_POOL = {}
 
-# Patch up basic Mongo functions to handle reconnect
-if not hasattr(pymongo, '_spmongo_monkeyed'):
-    pymongo._spmongo_monkeyed = False
-if not pymongo._spmongo_monkeyed:
-    # Helper function to reconnect.
-    # The first argument is the function which should be wrapped.
-    # The second argument is a helper function to locate the connection object
-    def _reconnect(fn, locate_connection):
-        def __reconnect(obj, *args, **kwargs):
+
+
+class _wrapped_object(object):
+    __reconnection_wrapper_in_effect = False
+    def __init__(self, obj):
+        self.__class__ = type(obj.__class__.__name__, (self.__class__, obj.__class__), {})
+        self.__dict__ = obj.__dict__
+    def _reconnect(self, fn, *args, **kwargs):
+        if not self.__reconnection_wrapper_in_effect:
+            warning_printed = False
             while True:
                 try:
-                    return fn(obj, *args, **kwargs)
-                #except socket.error as e:
-                #    splog.warning('socket error, disconnecting and reconnecting')
-                #    locate_connection(obj).disconnect()
-                except pymongo.errors.AutoReconnect as e:
+                    self.__reconnection_wrapper_in_effect = True
+                    ret = fn(self, *args, **kwargs)
+                    self.__reconnection_wrapper_in_effect = False
+                    return ret
+                except (pymongo.errors.AutoReconnect, socket.error) as e:
                     # Retry procedure.
                     # Do not disconnect, as this will cause Mongo to forget that it
                     # had checked the problematic host and re-check it, putting us
                     # into a loop that will only end when the host comes back online.
-                    splog.warning('Error communicating with Mongo, retrying')
-                    for line in traceback.format_exc(e).splitlines():
-                        splog.warning(line)
-                finally:
+                    if not warning_printed:
+                        splog.warning('Error communicating with Mongo, retrying')
+                        for line in traceback.format_exc(e).splitlines():
+                            splog.warning(line)
+                        warning_printed = True
                     time.sleep(MONGO_DOWN_NICE)
-        return __reconnect
-    
-    #_connection_module = __import__('pymongo.connection')
-    #_reconnect_connection = lambda fn: _reconnect(fn, lambda obj: obj)
-    #_connection_module.connection.Connection._Connection__find_node = _reconnect_connection(_connection_module.connection.Connection._Connection__find_node)
-    #_connection_module.connection.Connection._send_message= _reconnect_connection(_connection_module.connection.Connection._send_message)
-    #_connection_module.connection.Connection._send_message_with_response = _reconnect_connection(_connection_module.connection.Connection._send_message_with_response)
+        else:
+            return fn(self, *args, **kwargs)
 
-    #_cursor_module = __import__('pymongo.cursor')
-    #_reconnect_cursor = lambda fn: _reconnect(fn, lambda obj: obj.collection.database.connection)
-    #_cursor_module.cursor.Cursor._refresh = _reconnect_cursor(_cursor_module.cursor.Cursor._refresh)
-    
-    #_collection_module = __import__('pymongo.collection')
-    #_reconnect_collection = lambda fn: _reconnect(fn, lambda obj: obj.database.connection)
-    #for fn in dir(_collection_module.collection.Collection):
-    #    try:
-    #        assert(not fn.startswith('_'))
-    #        assert(fn not in ['super'])
-    #        assert(fn in _collection_module.collection.Collection.__dict__)
-    #        assert(hasattr(_collection_module.collection.Collection.__dict__[fn], '__call__'))
-    #        setattr(_collection_module.collection.Collection, fn, _reconnect_collection(_collection_module.collection.Collection.__dict__[fn]))
-    #        splog.info('Monkeyed with pymongo.collection.Collection.' + fn)
-    #    except AssertionError:
-    #        pass
+class _wrapped_cursor(_wrapped_object, pymongo.cursor.Cursor):
+    _refresh = lambda self, *args, **kwargs: self._reconnect(pymongo.cursor.Cursor._refresh, *args, **kwargs)
 
-    # Connection pooling on a per-process basis.
-    # TODO should this be per-thread?
-    CONNECTION_POOL = {}
+class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
+    find_one = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.find_one, *args, **kwargs)
+    find = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.find, *args, **kwargs)
+    update = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.update, *args, **kwargs)
+    insert = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.insert, *args, **kwargs)
+    remove = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.remove, *args, **kwargs)
 
-    # Don't redo all this
-    pymongo._spmongo_monkeyed = True
+class _wrapped_database(_wrapped_object, pymongo.database.Database):
+    def __getattr__(self, *args, **kwargs):
+        ret = pymongo.database.Database.__getattr__(self, *args, **kwargs)
+        if isinstance(ret, pymongo.collection.Collection):
+            return _wrapped_collection(ret)
+        else:
+            return ret
 
 class mongo(object):
     def __init__(self, *args, **kwargs):
@@ -82,7 +76,7 @@ class mongo(object):
             CONNECTION_POOL[tuple(self._hosts)] = pymongo.Connection(self._hosts)#, slave_okay=True)
         return CONNECTION_POOL[tuple(self._hosts)]
     def database(self, name):
-        return self.connection()[name]
+        return _wrapped_database(self.connection()[name])
     def collection(self, db, collection):
         return self.database(db).__getitem__(collection)
     def __getattr__(self, key):
