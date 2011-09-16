@@ -59,35 +59,46 @@ class _wrapped_cursor(_wrapped_object, pymongo.cursor.Cursor):
 class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
     _slave_collection = None
     _recheck_slave_status = 0
-    def _secondary(self, fn, *args, **kwargs):
-        try:
-            if self._slave_collection is None and self._recheck_slave_status <= 0:
-                # Locate slave connection for our master connection
-                choices = {c.host:c for c in self.database.connection._slave_connections}
-                del choices[self.database.connection.host]
-                slave_connection = choices[random.choice(choices.keys())]
-                self._slave_collection = slave_connection[self.database.name][self.name]
-                self._slave_collection.__am_secondary_connection = True
-            assert(self._slave_collection is not None)
-            return fn(self._slave_collection, *args, **kwargs)
-        except AssertionError:
-            self._recheck_slave_status -= 1
-        except (socket.error, pymongo.errors.AutoReconnect, IndexError):
-            self._slave_collection = None
-            self._recheck_slave_status = 1000
+    def _primary(self, fn, *args, **kwargs):
+        # We need to keep tabs on when we're writing to a collection, because
+        # writes must go to the primary, but reads can sometimes come from the
+        # secondary; this often results in a situation where we've just put a
+        # doc into the master and make a followup query about the thing we
+        # just inserted; this usually fails since the slave hasn't had time to
+        # sync.
+        kwargs['safe'] = True
         return self._reconnect(fn, *args, **kwargs)
-    def __init__(self, *args, **kwargs):
-        _wrapped_object.__init__(self, *args, **kwargs)
+    def _secondary(self, fn, *args, **kwargs):
         if not self._slave_okay:
-            self._secondary = self._reconnect
+            try:
+                if self._slave_collection is None and self._recheck_slave_status <= 0:
+                    # Locate slave connection for our master connection
+                    choices = {c.host:c for c in self.database.connection._slave_connections}
+                    del choices[self.database.connection.host]
+                    slave_connection = choices[random.choice(choices.keys())]
+                    self._slave_collection = slave_connection[self.database.name][self.name]
+                    self._slave_collection.__am_secondary_connection = True
+                assert(self._slave_collection is not None)
+                return fn(self._slave_collection, *args, **kwargs)
+            except AssertionError:
+                self._recheck_slave_status -= 1
+            except (socket.error, pymongo.errors.AutoReconnect, IndexError):
+                self._slave_collection = None
+                self._recheck_slave_status = 1000
+        # If any of the following were true:
+        # - The connection/database/collection did not set slave_okay
+        # - There are no secondary connections to use
+        # - We recieved an error talking to our chosen secondary connection
+        # then we fallback to making a reliable reconnectable call against the master connection
+        return self._reconnect(fn, *args, **kwargs)
     # These operations are fundamentally reads.  Route to slaves if possible.
     distinct = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.distinct, *args, **kwargs)
     find_one = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find_one, *args, **kwargs)
     find = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find, *args, **kwargs)
     # These operations are not.  Primary host only, please.
-    update = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.update, *args, **kwargs)
-    insert = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.insert, *args, **kwargs)
-    remove = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.remove, *args, **kwargs)
+    update = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.update, *args, **kwargs)
+    insert = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.insert, *args, **kwargs)
+    remove = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.remove, *args, **kwargs)
 
 class _wrapped_database(_wrapped_object, pymongo.database.Database):
     def __getattr__(self, *args, **kwargs):
