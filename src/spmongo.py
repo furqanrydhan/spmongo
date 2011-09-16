@@ -6,6 +6,7 @@ version = __version__
 
 import pymongo
 import pymongo.errors
+import random
 import socket
 import splog
 import time
@@ -21,9 +22,11 @@ CONNECTION_POOL = {}
 
 class _wrapped_object(object):
     __reconnection_wrapper_in_effect = False
-    def __init__(self, obj):
+    __am_secondary_connection = False
+    def __init__(self, obj, **kwargs):
         self.__class__ = type(obj.__class__.__name__, (self.__class__, obj.__class__), {})
         self.__dict__ = obj.__dict__
+        self._slave_okay = kwargs['slave_okay']
     def _reconnect(self, fn, *args, **kwargs):
         if not self.__reconnection_wrapper_in_effect:
             warning_printed = False
@@ -43,7 +46,10 @@ class _wrapped_object(object):
                         for line in traceback.format_exc(e).splitlines():
                             splog.warning(line)
                         warning_printed = True
-                    time.sleep(MONGO_DOWN_NICE)
+                    if self.__am_secondary_connection:
+                        raise
+                    else:
+                        time.sleep(MONGO_DOWN_NICE)
         else:
             return fn(self, *args, **kwargs)
 
@@ -51,8 +57,34 @@ class _wrapped_cursor(_wrapped_object, pymongo.cursor.Cursor):
     _refresh = lambda self, *args, **kwargs: self._reconnect(pymongo.cursor.Cursor._refresh, *args, **kwargs)
 
 class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
-    find_one = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.find_one, *args, **kwargs)
-    find = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.find, *args, **kwargs)
+    _slave_collection = None
+    _recheck_slave_status = 0
+    def _secondary(self, fn, *args, **kwargs):
+        try:
+            if self._slave_collection is None and self._recheck_slave_status <= 0:
+                # Locate slave connection for our master connection
+                choices = {c.host:c for c in self.database.connection._slave_connections}
+                del choices[self.database.connection.host]
+                slave_connection = choices[random.choice(choices.keys())]
+                self._slave_collection = slave_connection[self.database.name][self.name]
+                self._slave_collection.__am_secondary_connection = True
+            assert(self._slave_collection is not None)
+            return fn(self._slave_collection, *args, **kwargs)
+        except AssertionError:
+            self._recheck_slave_status -= 1
+        except (socket.error, pymongo.errors.AutoReconnect, IndexError):
+            self._slave_collection = None
+            self._recheck_slave_status = 1000
+        return self._reconnect(fn, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        _wrapped_object.__init__(self, *args, **kwargs)
+        if not self._slave_okay:
+            self._secondary = self._reconnect
+    # These operations are fundamentally reads.  Route to slaves if possible.
+    distinct = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.distinct, *args, **kwargs)
+    find_one = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find_one, *args, **kwargs)
+    find = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find, *args, **kwargs)
+    # These operations are not.  Primary host only, please.
     update = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.update, *args, **kwargs)
     insert = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.insert, *args, **kwargs)
     remove = lambda self, *args, **kwargs: self._reconnect(pymongo.collection.Collection.remove, *args, **kwargs)
@@ -61,22 +93,48 @@ class _wrapped_database(_wrapped_object, pymongo.database.Database):
     def __getattr__(self, *args, **kwargs):
         ret = pymongo.database.Database.__getattr__(self, *args, **kwargs)
         if isinstance(ret, pymongo.collection.Collection):
-            return _wrapped_collection(ret)
+            return _wrapped_collection(ret, slave_okay=self._slave_okay)
         else:
             return ret
 
 class mongo(object):
     def __init__(self, *args, **kwargs):
-        self._hosts = str(kwargs.get('hosts', kwargs.get('host', '127.0.0.1'))).split(',')
-        self._hosts = [(host.split(':')[0] if ':' in host else host) + ':' + str(kwargs.get('port', (host.split(':')[1] if ':' in host else 27017))) for host in self._hosts]
+        self._hosts = []
+        port = str(kwargs.get('port', 27017))
+        hosts = kwargs.get('hosts', kwargs.get('host', '127.0.0.1'))
+        if isinstance(hosts, basestring):
+            hosts = hosts.split(',')
+        for host in hosts:
+            if ':' in host:
+                self._hosts.append(host)
+            else:
+                self._hosts.append(':'.join([host, port]))
+        # Assume you want to distribute reads to slaves unless you tell me otherwise.
+        self._slave_okay = kwargs.get('slave_okay', True)
     def connection(self):
         global CONNECTION_POOL
-        if tuple(self._hosts) not in CONNECTION_POOL:
-            # TODO PyMongo does not do useful things with the slave_okay parameter at the moment.
-            CONNECTION_POOL[tuple(self._hosts)] = pymongo.Connection(self._hosts)#, slave_okay=True)
-        return CONNECTION_POOL[tuple(self._hosts)]
+        hashable_hosts = tuple(self._hosts)
+        if hashable_hosts not in CONNECTION_POOL:
+            # TODO PyMongo does not do useful things with the slave_okay
+            # parameter at the moment when connecting to an entire replica set.
+            CONNECTION_POOL[hashable_hosts] = pymongo.Connection(self._hosts)#, slave_okay=self._slave_okay)
+            CONNECTION_POOL[hashable_hosts]._slave_connections = []
+            if self._slave_okay:
+                # Determine the secondaries for this replicaset based on the
+                # info returned by the seeds we managed to connect to.  Make
+                # connections to them individually to route read-only
+                # operations (like find) to.
+                for (host, port) in CONNECTION_POOL[hashable_hosts].nodes:
+                    host += ':' + str(port)
+                    try:
+                        CONNECTION_POOL[host] = pymongo.Connection(host, slave_okay=True)
+                        CONNECTION_POOL[hashable_hosts]._slave_connections.append(CONNECTION_POOL[host])
+                    except pymongo.errors.AutoReconnect:
+                        # This host is not up.
+                        pass
+        return CONNECTION_POOL[hashable_hosts]
     def database(self, name):
-        return _wrapped_database(self.connection()[name])
+        return _wrapped_database(self.connection()[name], slave_okay=self._slave_okay)
     def collection(self, db, collection):
         return self.database(db).__getitem__(collection)
     def __getattr__(self, key):
