@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version_info__ = (0, 1, 9)
+__version_info__ = (0, 2, 0)
 __version__ = '.'.join([str(i) for i in __version_info__])
 version = __version__
 
@@ -84,15 +84,17 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
                 if self._slave_collection is None and self._recheck_slave_status <= 0:
                     # Locate slave connection for our master connection
                     choices = {c.host:c for c in self.database.connection._slave_connections}
-                    del choices[self.database.connection.host]
-                    slave_connection = choices[random.choice(choices.keys())]
-                    self._slave_collection = slave_connection[self.database.name][self.name]
-                    self._slave_collection.__am_secondary_connection = True
+                    if self.database.connection.host in choices:
+                        del choices[self.database.connection.host]
+                    if len(choices) > 0:
+                        slave_connection = choices[random.choice(choices.keys())]
+                        self._slave_collection = slave_connection[self.database.name][self.name]
+                        self._slave_collection.__am_secondary_connection = True
                 assert(self._slave_collection is not None)
                 return fn(self._slave_collection, *args, **kwargs)
             except AssertionError:
                 self._recheck_slave_status -= 1
-            except (socket.error, pymongo.errors.AutoReconnect, IndexError):
+            except (socket.error, pymongo.errors.AutoReconnect):
                 self._slave_collection = None
                 self._recheck_slave_status = 1000
         # If any of the following were true:
