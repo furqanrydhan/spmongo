@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 
-__version_info__ = (0, 1, 8)
+__version_info__ = (0, 1, 9)
 __version__ = '.'.join([str(i) for i in __version_info__])
 version = __version__
 
 import pymongo
 import pymongo.errors
+#import pymongo.son_manipulator
 import random
 import socket
 import splog
@@ -19,6 +20,15 @@ MONGO_DOWN_NICE = 0.5
 CONNECTION_POOL = {}
 
 
+
+#class TimestampInjector(pymongo.son_manipulator.SONManipulator):
+#    def transform_incoming(self, son, collection):
+#        if not 'created_at' in son:
+#            if '_id' in son:
+#                son['created_at'] = time.mktime(son['_id'].generation_time.timetuple())
+#            else:
+#                son['created_at'] = time.time()
+#        return son
 
 class _wrapped_object(object):
     __reconnection_wrapper_in_effect = False
@@ -66,10 +76,10 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
         # doc into the master and make a followup query about the thing we
         # just inserted; this usually fails since the slave hasn't had time to
         # sync.
-        kwargs['safe'] = True
+        kwargs['safe'] = self._slave_okay
         return self._reconnect(fn, *args, **kwargs)
     def _secondary(self, fn, *args, **kwargs):
-        if not self._slave_okay:
+        if self._slave_okay:
             try:
                 if self._slave_collection is None and self._recheck_slave_status <= 0:
                     # Locate slave connection for our master connection
@@ -101,6 +111,10 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
     remove = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.remove, *args, **kwargs)
 
 class _wrapped_database(_wrapped_object, pymongo.database.Database):
+#    def __init__(self, *args, **kwargs):
+#        _wrapped_object.__init__(self, *args, **kwargs)
+#        # Add a son manipulator which will add timestamps to inserted/upserted documents.
+#        self.add_son_manipulator(TimestampInjector())
     def __getattr__(self, *args, **kwargs):
         ret = pymongo.database.Database.__getattr__(self, *args, **kwargs)
         if isinstance(ret, pymongo.collection.Collection):
@@ -120,8 +134,8 @@ class mongo(object):
                 self._hosts.append(host)
             else:
                 self._hosts.append(':'.join([host, port]))
-        # Assume you want to distribute reads to slaves unless you tell me otherwise.
-        self._slave_okay = kwargs.get('slave_okay', True)
+        # Distributing reads across slaves is not necessarily for everybody
+        self._slave_okay = kwargs.get('slave_okay', False)
     def connection(self):
         global CONNECTION_POOL
         hashable_hosts = tuple(self._hosts)
