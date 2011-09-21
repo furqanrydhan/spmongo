@@ -69,6 +69,7 @@ class _wrapped_cursor(_wrapped_object, pymongo.cursor.Cursor):
 class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
     _slave_collection = None
     _recheck_slave_status = 0
+    __secondary_wrapper_in_effect = False
     def _primary(self, fn, *args, **kwargs):
         # We need to keep tabs on when we're writing to a collection, because
         # writes must go to the primary, but reads can sometimes come from the
@@ -76,27 +77,38 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
         # doc into the master and make a followup query about the thing we
         # just inserted; this usually fails since the slave hasn't had time to
         # sync.
-        kwargs['safe'] = self._slave_okay
+        #kwargs['safe'] = self._slave_okay
         return self._reconnect(fn, *args, **kwargs)
     def _secondary(self, fn, *args, **kwargs):
-        if self._slave_okay:
-            try:
-                if self._slave_collection is None and self._recheck_slave_status <= 0:
-                    # Locate slave connection for our master connection
-                    choices = {c.host:c for c in self.database.connection._slave_connections}
-                    if self.database.connection.host in choices:
-                        del choices[self.database.connection.host]
-                    if len(choices) > 0:
-                        slave_connection = choices[random.choice(choices.keys())]
-                        self._slave_collection = slave_connection[self.database.name][self.name]
-                        self._slave_collection.__am_secondary_connection = True
-                assert(self._slave_collection is not None)
-                return fn(self._slave_collection, *args, **kwargs)
-            except AssertionError:
-                self._recheck_slave_status -= 1
-            except (socket.error, pymongo.errors.AutoReconnect):
-                self._slave_collection = None
-                self._recheck_slave_status = 1000
+        if not self.__secondary_wrapper_in_effect:
+            if kwargs.get('slave_okay', self._slave_okay) and not kwargs.get('_must_use_master', False):
+                try:
+                    if self._slave_collection is None and self._recheck_slave_status <= 0:
+                        # Locate slave connection for our master connection
+                        choices = {c.host:c for c in self.database.connection._slave_connections}
+                        if self.database.connection.host in choices:
+                            del choices[self.database.connection.host]
+                        if len(choices) > 0:
+                            slave_connection = choices[random.choice(choices.keys())]
+                            self._slave_collection = slave_connection[self.database.name][self.name]
+                            self._slave_collection.__am_secondary_connection = True
+                    assert(self._slave_collection is not None)
+                    self.__secondary_wrapper_in_effect = True
+                    ret = fn(self._slave_collection, *args, **kwargs)
+                    self.__secondary_wrapper_in_effect = False
+                    # If no results, double check with the master.
+                    if isinstance(ret, pymongo.cursor.Cursor) and ret.count() == 0:
+                        ret = None
+                    if isinstance(ret, list) and len(ret) == 0:
+                        ret = None
+                    if ret is not None:
+                        return ret
+                    # else fall through
+                except AssertionError:
+                    self._recheck_slave_status -= 1
+                except (socket.error, pymongo.errors.AutoReconnect):
+                    self._slave_collection = None
+                    self._recheck_slave_status = 1000
         # If any of the following were true:
         # - The connection/database/collection did not set slave_okay
         # - There are no secondary connections to use
@@ -140,7 +152,7 @@ class mongo(object):
         self._slave_okay = kwargs.get('slave_okay', False)
     def connection(self):
         global CONNECTION_POOL
-        hashable_hosts = tuple(self._hosts)
+        hashable_hosts = tuple(self._hosts + [self._slave_okay])
         if hashable_hosts not in CONNECTION_POOL:
             # TODO PyMongo does not do useful things with the slave_okay
             # parameter at the moment when connecting to an entire replica set.
