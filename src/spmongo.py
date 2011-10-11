@@ -118,7 +118,7 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
     # These operations are fundamentally reads.  Route to slaves if possible.
     distinct = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.distinct, *args, **kwargs)
     find_one = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find_one, *args, **kwargs)
-    find = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find, *args, **kwargs)
+    find = lambda self, *args, **kwargs: _wrapped_cursor(self._secondary(pymongo.collection.Collection.find, *args, **kwargs), slave_okay=self._slave_okay)
     # These operations are not.  Primary host only, please.
     update = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.update, *args, **kwargs)
     insert = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.insert, *args, **kwargs)

@@ -37,14 +37,14 @@ def setup():
         url='http://github.com/stylepage/spmongo',
         package_dir={'': 'src'},
         py_modules=[
-            'spmongo',
+            package_name,
         ],
         install_requires=[
             'pymongo==2.0.1',
-            'splog==0.1.8',
+            'splog>=0.2.4',
         ],
         dependency_links=[
-            github('splog', '0.1.8'),
+            github('splog', '0.2.4'),
         ],
     )
 
