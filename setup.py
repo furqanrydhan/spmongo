@@ -41,10 +41,10 @@ def setup():
         ],
         install_requires=[
             'pymongo==2.0.1',
-            'splog>=0.2.6',
+            'splog>=0.2.7',
         ],
         dependency_links=[
-            github('splog', '0.2.6'),
+            github('splog', '0.2.7'),
         ],
     )
 
