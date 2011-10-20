@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version_info__ = (0, 2, 2)
+__version_info__ = (0, 2, 3)
 __version__ = '.'.join([str(i) for i in __version_info__])
 version = __version__
 
@@ -119,6 +119,7 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
     distinct = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.distinct, *args, **kwargs)
     find_one = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.find_one, *args, **kwargs)
     find = lambda self, *args, **kwargs: _wrapped_cursor(self._secondary(pymongo.collection.Collection.find, *args, **kwargs), slave_okay=self._slave_okay)
+    map_reduce = lambda self, *args, **kwargs: self._secondary(pymongo.collection.Collection.map_reduce, *args, **kwargs)
     # These operations are not.  Primary host only, please.
     update = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.update, *args, **kwargs)
     insert = lambda self, *args, **kwargs: self._primary(pymongo.collection.Collection.insert, *args, **kwargs)

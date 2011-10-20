@@ -20,7 +20,7 @@ def version(package_name):
         version = 'unknown'
     return version
 
-def github(package_name, version=None):
+def github(package_name, version):
     # The important things here:
     # 1. The URL should be accessible
     # 2. The URL should point to a page which _is_, or which clearly points _to_, the tarball/zipball/egg
@@ -41,10 +41,10 @@ def setup():
         ],
         install_requires=[
             'pymongo==2.0.1',
-            'splog>=0.2.7',
+            'splog>=0.2.8',
         ],
         dependency_links=[
-            github('splog', '0.2.7'),
+            github('splog', '0.2.8'),
         ],
     )
 
