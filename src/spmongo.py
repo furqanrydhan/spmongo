@@ -44,7 +44,6 @@ class _wrapped_object(object):
                 try:
                     self.__reconnection_wrapper_in_effect = True
                     ret = fn(self, *args, **kwargs)
-                    print str(self.__class__)
                     try:
                         self.connection.end_request()
                     except (AttributeError, TypeError):
