@@ -44,6 +44,8 @@ class _wrapped_object(object):
                 try:
                     self.__reconnection_wrapper_in_effect = True
                     ret = fn(self, *args, **kwargs)
+                    if 'end_request' in self.__dict__:
+                        self.end_request()
                     self.__reconnection_wrapper_in_effect = False
                     return ret
                 except (pymongo.errors.AutoReconnect, socket.error) as e:
