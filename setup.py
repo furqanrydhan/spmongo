@@ -40,7 +40,7 @@ def setup():
             package_name,
         ],
         install_requires=[
-            'pymongo==2.0.1',
+            'pymongo==2.1',
             'splog>=0.2.8',
         ],
         dependency_links=[
