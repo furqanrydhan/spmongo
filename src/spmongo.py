@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version_info__ = (0, 2, 6)
+__version_info__ = (0, 2, 7)
 __version__ = '.'.join([str(i) for i in __version_info__])
 version = __version__
 
@@ -12,11 +12,66 @@ import splog
 import time
 import traceback
 
+try:
+    # Are you using gevent?
+    import gevent.hub
+    import gevent.queue
+    import gevent.greenlet
+    import gevent.coros
+    import weakref
+    
+    class _gevent_safe_connection_pool(object):
+        def __init__(self, *args, **kwargs):
+            traceback.print_stack()
+            self.network_timeout = 3.0
+            self.pool_size = 10
+            self._lock = gevent.coros.RLock()
+            self._count = 0
+            self._used = {}
+            self._queue = gevent.queue.Queue(self.pool_size)
+            self.args = args
+            self.kwargs = kwargs
+
+        def connect(self):
+            return pymongo.ReplicaSetConnection(*self.args, **self.kwargs)
+
+        def get(self):
+            greenlet = gevent.hub.getcurrent()
+            conn = self._used.get(greenlet)
+            if conn is None:
+                with self._lock:
+                    if self._count < self.pool_size:
+                        self._count += 1
+                        conn = self.connect()
+            if conn is None:
+                conn = self._queue.get(timeout=self.network_timeout)
+
+            if isinstance(greenlet, gevent.Greenlet):
+                greenlet.link(self._put)
+                self._used[greenlet] = conn
+            else:
+                ref = weakref.ref(greenlet, self._put)
+                self._used[ref] = sock
+            return conn
+
+        def put(self):
+            greenlet = gevent.hub.getcurrent()
+            self._put(greenlet)
+
+        def _put(self, greenlet):
+            try:
+                conn = self._used.get(greenlet)
+                if conn is not None:
+                    del self._used[greenlet]
+                    self._queue.put(conn)
+            except:
+                with self._lock:
+                    self._count -= 1
+except ImportError:
+    pass
+
 # It can take up to 30 seconds for a new primary to be selected by the replicaset.  Please reduce thrashing.
 MONGO_DOWN_NICE = 0.5
-# Per-process connection pool.
-# TODO should this be per-thread?
-#CONNECTION_POOL = {}
 
 
 
@@ -32,16 +87,6 @@ class _wrapped_object(object):
                 try:
                     self.__reconnection_wrapper_in_effect = True
                     ret = fn(self, *args, **kwargs)
-                #    try:
-                #        self.connection.end_request()
-                #    except (AttributeError, TypeError):
-                #        try:
-                #            self.database.connection.end_request()
-                #        except (AttributeError, TypeError):
-                #            try:
-                #                self.collection.database.connection.end_request()
-                #            except (AttributeError, TypeError):
-                #                pass
                     self.__reconnection_wrapper_in_effect = False
                     return ret
                 except (pymongo.errors.AutoReconnect, socket.error) as e:
@@ -119,13 +164,19 @@ class mongo(object):
             else:
                 self._hosts.append(':'.join([host, port]))
         self._rsname = kwargs.get('replicaset')
+        try:
+            assert(self._rsname is not None)
+            self._pool = _gevent_safe_connection_pool(','.join(self._hosts), max_pool_size=1, replicaSet=self._rsname, read_preference=pymongo.ReadPreference.SECONDARY)
+        except (AssertionError, NameError):
+            self._pool = None
     def connection(self):
-        if self._connection is None:
-            if self._rsname is not None:
-                self._connection = pymongo.ReplicaSetConnection(','.join(self._hosts), max_pool_size=1, replicaSet=self._rsname, read_preference=pymongo.ReadPreference.SECONDARY)
-            else:
+        if self._pool is not None:
+            # Pull from pool.  This should return the one already in use by this greenlet if any.
+            return self._pool.get()
+        else:
+            if self._connection is None:
                 self._connection = pymongo.Connection(self._hosts, max_pool_size=1)
-        return self._connection
+            return self._connection
     def database(self, name):
         return _wrapped_database(self.connection()[name])
     def collection(self, db, collection):
