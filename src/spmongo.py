@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version_info__ = (0, 2, 8)
+__version_info__ = (0, 2, 9)
 __version__ = '.'.join([str(i) for i in __version_info__])
 version = __version__
 
@@ -22,6 +22,7 @@ try:
     
     class _gevent_safe_connection_pool(object):
         def __init__(self, *args, **kwargs):
+            self.internal_timeout = 0.1
             self.network_timeout = 3.0
             self.pool_size = 10
             self._lock = gevent.coros.RLock()
@@ -34,23 +35,28 @@ try:
         def _make_connection(self):
             return pymongo.ReplicaSetConnection(*self.args, **self.kwargs)
 
+        def _reference_or_greenlet(self):
+            greenlet = gevent.hub.getcurrent()
+            return (greenlet if isinstance(greenlet, gevent.Greenlet) else weakref.ref(greenlet, self._put))
+
         def get(self):
             greenlet = gevent.hub.getcurrent()
-            conn = self._used.get(greenlet)
+            ref = self._reference_or_greenlet()
+            conn = self._used.get(ref)
             if conn is None:
                 with self._lock:
-                    if self._count < self.pool_size:
+                    # Prefer an idle connection from the pool over creating connections to pool limit.
+                    if len(self._used) < self._count:
+                        conn = self._queue.get(timeout=self.internal_timeout)
+                    if conn is None and self._count < self.pool_size:
                         self._count += 1
                         conn = self._make_connection()
-            if conn is None:
-                conn = self._queue.get(timeout=self.network_timeout)
+                if conn is None:
+                    conn = self._queue.get(timeout=self.network_timeout)
 
             if isinstance(greenlet, gevent.Greenlet):
                 greenlet.link(self._put)
-                self._used[greenlet] = conn
-            else:
-                ref = weakref.ref(greenlet, self._put)
-                self._used[ref] = conn
+            self._used[ref] = conn
             return conn
 
         def put(self):
@@ -59,6 +65,9 @@ try:
 
         def _put(self, greenlet):
             try:
+                # It's actually okay to just look up by the greenlet here (instead of greenlet-or-weakref)
+                # because the weakref hashes the same as the underlying object, so if we stored a weakref,
+                # we can look up by greenlet.
                 conn = self._used.get(greenlet)
                 if conn is not None:
                     del self._used[greenlet]
