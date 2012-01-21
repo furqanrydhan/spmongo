@@ -149,11 +149,13 @@ class _wrapped_collection(_wrapped_object, pymongo.collection.Collection):
         # We must retry on primary if this find_one query went to a secondary and found no results.
         try:
             start = time.time()
+            kwargs.pop('read_preference', None)
             ret = self._reconnect(pymongo.collection.Collection.find_one, *args, read_preference=pymongo.ReadPreference.SECONDARY, **kwargs)
             self._report('find_one', 'secondary', time.time() - start)
             assert(ret is not None)
         except AssertionError:
             start = time.time()
+            kwargs.pop('read_preference', None)
             ret = self._reconnect(pymongo.collection.Collection.find_one, *args, read_preference=pymongo.ReadPreference.PRIMARY, **kwargs)
             self._report('find_one', 'primary', time.time() - start)
         return ret
